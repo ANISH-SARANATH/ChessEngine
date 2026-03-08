@@ -12,3 +12,12 @@ dist/
 out/
 pnpm-lock.yaml
 yarn.lock
+
+# Python caches
+**/__pycache__/
+*.pyc
+
+# Local build/cache files
+*.tsbuildinfo
+runtime/
+backend/data/
