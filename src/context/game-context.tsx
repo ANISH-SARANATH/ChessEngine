@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+﻿import React, { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 import { Chess, type Color, type PieceSymbol, type Square } from 'chess.js';
 
 export type GameFormat = 'blitz' | 'rapid' | 'powers' | 'knockout';
@@ -172,6 +172,7 @@ interface GameContextType {
   setActivePowerMode: (mode: string | null) => void;
   setSelectedPowerSquare: (square: string | null) => void;
   makeSpecialMove: (ability: string, from: string, to?: string, emit?: boolean) => boolean;
+  triggerResurrection: (player: PlayerColor, emit?: boolean) => boolean;
   useHarmonyToken: (player: PlayerColor, emit?: boolean) => void;
   surrender: (player: PlayerColor, emit?: boolean) => void;
   applyRemoteEvent: (event: NetworkEvent) => void;
@@ -187,7 +188,6 @@ const defaultUsedPowers = (): UsedPowersState => ({
 });
 
 const normalizeColorKey = (color: PlayerColor): 'white' | 'black' => (color === 'w' ? 'white' : 'black');
-const canResurrect = (usedPowers: UsedPowersState, color: PlayerColor): boolean => !usedPowers[normalizeColorKey(color)].resurrection;
 
 const advanceFenTurnAfterManualMove = (
   fen: string,
@@ -279,7 +279,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const [chess, setChess] = useState<Chess>(new Chess());
   const networkHandlerRef = useRef<((event: NetworkEvent) => void) | null>(null);
-  const resurrectionPendingRef = useRef<{ w: boolean; b: boolean }>({ w: false, b: false });
 
   const emitNetwork = useCallback((event: NetworkEvent, shouldEmit: boolean) => {
     if (shouldEmit && networkHandlerRef.current) {
@@ -301,24 +300,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setChess(nextChess);
       setGameState((prev) => {
         const nextTurn: PlayerColor = prev.currentTurn === 'w' ? 'b' : 'w';
-        let usedPowers = usedPowersOverride ?? prev.usedPowers;
+        const usedPowers = usedPowersOverride ?? prev.usedPowers;
 
-        const reviveSquare: Record<PlayerColor, Square> = { w: 'd1', b: 'd8' };
-        if (resurrectionPendingRef.current[nextTurn]) {
-          const sq = reviveSquare[nextTurn];
-          const occupying = nextChess.get(sq);
-          if (!occupying) {
-            nextChess.put({ type: 'q', color: nextTurn }, sq);
-            resurrectionPendingRef.current[nextTurn] = false;
-            usedPowers = {
-              ...usedPowers,
-              [normalizeColorKey(nextTurn)]: {
-                ...usedPowers[normalizeColorKey(nextTurn)],
-                resurrection: true,
-              },
-            };
-          }
-        }
 
         const move: Move = {
           san: movePrefix ? `${movePrefix}: ${san}` : san,
@@ -387,8 +370,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const initializeGame = useCallback((format: GameFormat, whitePlayer: string, blackPlayer: string) => {
     const config = formatConfig[format];
     const instance = new Chess();
-
-    resurrectionPendingRef.current = { w: false, b: false };
     setChess(instance);
     setGameState({
       format,
@@ -440,8 +421,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
         // Ignore invalid server FEN and fall back to start position.
       }
     }
-
-    resurrectionPendingRef.current = { w: false, b: false };
     setChess(instance);
     setGameState((prev) => ({
       ...prev,
@@ -479,37 +458,29 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-      const nextChess = new Chess(chess.fen());
-      const movedPiece = nextChess.get(from as Square);
-      const move = nextChess.move({ from: from as Square, to: to as Square, promotion: 'q' });
+        const nextChess = new Chess(chess.fen());
+        const movedPiece = nextChess.get(from as Square);
+        const move = nextChess.move({ from: from as Square, to: to as Square, promotion: 'q' });
 
-      if (!move || !movedPiece) {
-        return false;
-      }
-
-      if (move.captured === 'q') {
-        const capturedColor = movedPiece.color === 'w' ? 'b' : 'w';
-        if (canResurrect(gameState.usedPowers, capturedColor)) {
-          resurrectionPendingRef.current[capturedColor] = true;
+        if (!move || !movedPiece) {
+          return false;
         }
-      }
 
-      const increment = formatConfig[gameState.format].increment;
-      setGameState((prev) => ({
-        ...prev,
-        whiteTime: prev.currentTurn === 'w' ? prev.whiteTime + increment : prev.whiteTime,
-        blackTime: prev.currentTurn === 'b' ? prev.blackTime + increment : prev.blackTime,
-      }));
+        const increment = formatConfig[gameState.format].increment;
+        setGameState((prev) => ({
+          ...prev,
+          whiteTime: prev.currentTurn === 'w' ? prev.whiteTime + increment : prev.whiteTime,
+          blackTime: prev.currentTurn === 'b' ? prev.blackTime + increment : prev.blackTime,
+        }));
 
-      finishTurn(nextChess, from, to, movedPiece.type, move.san, emit);
-      return true;
+        finishTurn(nextChess, from, to, movedPiece.type, move.san, emit);
+        return true;
       } catch {
         return false;
       }
     },
-    [chess, gameState.format, emitNetwork, finishTurn],
+    [chess, gameState.format, finishTurn],
   );
-
   const makeSpecialMove = useCallback(
     (ability: string, from: string, to?: string, emit = true) => {
       try {
@@ -604,9 +575,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
         nextChess.remove(from as Square);
         if (targetPiece) {
-          if (targetPiece.type === 'q' && canResurrect(gameState.usedPowers, targetPiece.color)) {
-            resurrectionPendingRef.current[targetPiece.color] = true;
-          }
           nextChess.remove(to as Square);
         }
         nextChess.put({ type: 'n', color: piece.color }, to as Square);
@@ -673,6 +641,68 @@ export function GameProvider({ children }: { children: ReactNode }) {
     [chess, emitNetwork, finishTurn, gameState.usedPowers],
   );
 
+  const triggerResurrection = useCallback(
+    (player: PlayerColor, emit = true) => {
+      if (gameState.format !== 'powers' || player !== gameState.currentTurn) {
+        return false;
+      }
+
+      const colorKey = normalizeColorKey(player);
+      if (gameState.usedPowers[colorKey].resurrection) {
+        return false;
+      }
+
+      const nextChess = new Chess(chess.fen());
+      const hasQueen = nextChess.board().some((rank) => rank.some((piece) => piece?.type === 'q' && piece.color === player));
+      if (hasQueen) {
+        return false;
+      }
+
+      const reviveSquare = (player === 'w' ? 'd1' : 'd8') as Square;
+      if (nextChess.get(reviveSquare)) {
+        return false;
+      }
+
+      nextChess.put({ type: 'q', color: player }, reviveSquare);
+      const usedPowers: UsedPowersState = {
+        ...gameState.usedPowers,
+        [colorKey]: {
+          ...gameState.usedPowers[colorKey],
+          resurrection: true,
+        },
+      };
+
+      setChess(nextChess);
+      setGameState((prev) => ({
+        ...prev,
+        usedPowers,
+        selectedSquare: null,
+        legalMoves: [],
+        activePowerMode: null,
+        boardHistory: [...prev.boardHistory, nextChess.fen()],
+      }));
+
+      emitNetwork(
+        {
+          type: 'state_sync',
+          state: {
+            fen: nextChess.fen(),
+            current_turn: gameState.currentTurn,
+            white_time: gameState.whiteTime,
+            black_time: gameState.blackTime,
+            white_harmony_tokens: gameState.whiteHarmonyTokens,
+            black_harmony_tokens: gameState.blackHarmonyTokens,
+            used_powers: usedPowers,
+            moves: gameState.moves,
+          },
+        },
+        emit,
+      );
+
+      return true;
+    },
+    [chess, emitNetwork, gameState],
+  );
   const selectSquare = useCallback((square: string | null) => {
     setGameState((prev) => ({ ...prev, selectedSquare: square }));
   }, []);
@@ -759,7 +789,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const resetGame = useCallback(() => {
     const instance = new Chess();
-    resurrectionPendingRef.current = { w: false, b: false };
     setChess(instance);
     setGameState((prev) => {
       const tokenLimit = formatConfig[prev.format].maxTokens;
@@ -939,6 +968,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setActivePowerMode,
         setSelectedPowerSquare,
         makeSpecialMove,
+        triggerResurrection,
         useHarmonyToken,
         surrender,
         applyRemoteEvent,
@@ -958,6 +988,8 @@ export function useGame() {
   }
   return context;
 }
+
+
 
 
 

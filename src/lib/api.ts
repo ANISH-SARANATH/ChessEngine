@@ -40,9 +40,19 @@ export interface SessionState {
   white_harmony_tokens: number;
   black_harmony_tokens: number;
   used_powers: {
-    white: Record<string, boolean>;
-    black: Record<string, boolean>;
+  white: {
+    convert: boolean;
+    leap: boolean;
+    trade: boolean;
+    resurrection: boolean;
   };
+  black: {
+    convert: boolean;
+    leap: boolean;
+    trade: boolean;
+    resurrection: boolean;
+  };
+};
 }
 
 export interface WaitingPlayer {
@@ -88,6 +98,15 @@ export async function fetchRoundState(): Promise<PublicRoundState> {
   return response.json() as Promise<PublicRoundState>;
 }
 
+
+export async function fetchSessionState(sessionId: string): Promise<SessionState> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/session/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(`Session not found`);
+  }
+  const data = await response.json();
+  return data.session as SessionState;
+}
 export async function adminLogin(password: string): Promise<boolean> {
   const response = await fetch(`${API_BASE_URL}/api/v1/admin/login`, {
     method: 'POST',
@@ -180,3 +199,6 @@ export async function updateAdminTimeControl(password: string, format: GameForma
   const data = await response.json();
   return data.time_controls as Record<GameFormat, TimeControlConfig>;
 }
+
+
+

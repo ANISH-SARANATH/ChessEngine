@@ -51,28 +51,10 @@ class MultiplayerStore:
 
     def _load_or_create(self) -> dict[str, Any]:
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
-        if not os.path.exists(self._path):
-            state = self._default_state()
-            self._write_state(state)
-            return state
-
-        with open(self._path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        defaults = self._default_state()
-        for key, default in defaults.items():
-            data.setdefault(key, default)
-
-        for fmt in DEFAULT_GAME_ORDER:
-            data["pair_history_by_format"].setdefault(fmt, [])
-            data["time_controls"].setdefault(fmt, deepcopy(FORMAT_CONFIG[fmt]))
-
-        for player in data.get("players", {}).values():
-            player.setdefault("included_in_event", True)
-            player.setdefault("status", "active")
-            player.setdefault("queue_bucket", "ready")
-
-        return data
+        # Always start with a fresh tournament runtime state on backend boot.
+        state = self._default_state()
+        self._write_state(state)
+        return state
 
     def _write_state(self, state: dict[str, Any]) -> None:
         state["updated_at"] = _utc_now()
@@ -264,9 +246,15 @@ class MultiplayerStore:
                     changed_keys.add(key)
 
             session["updated_at"] = _utc_now()
-            # Realtime path: throttle disk writes to avoid websocket lag.
+            # Persist only every 15 moves (or if no move list present yet) to reduce write overhead.
             if changed_keys:
-                self._persist_throttled(force=False)
+                if "moves" in changed_keys:
+                    moves = session.get("moves", [])
+                    should_persist = not isinstance(moves, list) or len(moves) == 0 or len(moves) % 15 == 0
+                    if should_persist:
+                        self._persist()
+                else:
+                    self._persist_throttled(force=False)
             return deepcopy(session)
 
     def complete_session(self, session_id: str, winner_color: str | None, is_draw: bool) -> dict[str, Any] | None:
@@ -426,6 +414,9 @@ class MultiplayerStore:
 
 
 multiplayer_store = MultiplayerStore()
+
+
+
 
 
 

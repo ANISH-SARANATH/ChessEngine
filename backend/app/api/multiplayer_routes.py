@@ -255,23 +255,9 @@ async def game_socket(websocket: WebSocket, session_id: str, player_id: str = Qu
                 # Transient action messages are intentionally ignored; state_sync is authoritative.
                 continue
     except WebSocketDisconnect:
-        latest = multiplayer_store.get_session(session_id)
-        lock_player = False
-        if latest and latest.get("status") == "ongoing":
-            winner_color = "b" if player_id == latest["white_player_id"] else "w"
-            multiplayer_store.complete_session(session_id, winner_color, False)
-            await multiplayer_runtime.broadcast_to_session(
-                session_id,
-                {
-                    "type": "game_over",
-                    "winner_color": winner_color,
-                    "is_draw": False,
-                    "leaderboard": multiplayer_store.get_leaderboard(),
-                },
-            )
-            # Mid-game disconnect: mark player inactive/disqualified for this event flow.
-            lock_player = True
-        # Post-game navigation/reconnect should not make player ineligible.
-        await multiplayer_runtime.disconnect_game(session_id, player_id, lock_player=lock_player, websocket=websocket)
+        # Reload/temporary disconnect should not auto-forfeit the match.
+        # Session stays ongoing and player can reconnect using the same session_id.
+        await multiplayer_runtime.disconnect_game(session_id, player_id, lock_player=False, websocket=websocket)
+
 
 

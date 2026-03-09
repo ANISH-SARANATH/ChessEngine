@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronLeft, Clock, Flag, RotateCcw, Settings, Users } from 'lucide-react';
+import { ChevronLeft, Flag, RotateCcw, Settings, Users } from 'lucide-react';
 
 import { Header } from '@/components/header';
 import { InteractiveChessBoard } from '@/components/interactive-chess-board';
@@ -8,7 +8,7 @@ import { GameErrorBoundary } from '@/components/game-error-boundary';
 import { MoveHistory } from '@/components/move-history';
 import { Button } from '@/components/ui/button';
 import { useGame } from '@/context/game-context';
-import { API_BASE_URL, WS_BASE_URL, fetchRoundState, type PlayerProfile } from '@/lib/api';
+import { WS_BASE_URL, fetchRoundState, fetchSessionState, type PlayerProfile } from '@/lib/api';
 
 type Format = 'blitz' | 'rapid' | 'powers' | 'knockout';
 
@@ -35,6 +35,8 @@ interface PairMessage {
     fen: string;
   };
 }
+
+const ACTIVE_SESSION_KEY = 'chess_active_session';
 
 const RULES_BY_FORMAT: Record<Format, string[]> = {
   blitz: ['Normal chess', 'Fast tactical play'],
@@ -168,51 +170,107 @@ export default function GamePlay() {
     waitingSocketRef.current?.close();
     gameSocketRef.current?.close();
 
-    const waitingSocket = new WebSocket(`${WS_BASE_URL}/ws/multiplayer/waiting-room`);
-    waitingSocketRef.current = waitingSocket;
+    const openWaitingRoom = () => {
+      const waitingSocket = new WebSocket(`${WS_BASE_URL}/ws/multiplayer/waiting-room`);
+      waitingSocketRef.current = waitingSocket;
 
-    waitingSocket.onopen = () => {
-      waitingSocket.send(JSON.stringify({ type: 'join_waiting_room', player_id: player.id, player_name: player.name }));
-      if (waitingPingRef.current) {
-        window.clearInterval(waitingPingRef.current);
-      }
-      waitingPingRef.current = window.setInterval(() => {
-        if (waitingSocket.readyState === WebSocket.OPEN) {
-          waitingSocket.send(JSON.stringify({ type: 'ping' }));
+      waitingSocket.onopen = () => {
+        waitingSocket.send(JSON.stringify({ type: 'join_waiting_room', player_id: player.id, player_name: player.name }));
+        if (waitingPingRef.current) {
+          window.clearInterval(waitingPingRef.current);
         }
-      }, 15000);
+        waitingPingRef.current = window.setInterval(() => {
+          if (waitingSocket.readyState === WebSocket.OPEN) {
+            waitingSocket.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 15000);
+      };
+
+      waitingSocket.onclose = () => {
+        if (waitingPingRef.current) {
+          window.clearInterval(waitingPingRef.current);
+          waitingPingRef.current = null;
+        }
+      };
+
+      waitingSocket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as PairMessage | { type: 'error'; message: string } | { type: 'waiting'; message: string } | { type: 'pong' };
+          if (!message || message.type === 'pong') {
+            return;
+          }
+          if (message.type === 'error' || message.type === 'waiting') {
+            setWaitingMessage(message.message);
+            return;
+          }
+          if (message.type === 'paired') {
+            sessionStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({
+              session_id: message.session.id,
+              player_id: message.player_id,
+            }));
+            setPendingPair(message);
+            setIsWaiting(false);
+            waitingSocketRef.current?.close();
+          }
+        } catch {
+          // Ignore malformed waiting-room events to avoid UI crashes.
+        }
+      };
+
+      waitingSocket.onerror = () => {
+        setWaitingMessage('Unable to connect to backend.');
+      };
     };
 
-    waitingSocket.onclose = () => {
-      if (waitingPingRef.current) {
-        window.clearInterval(waitingPingRef.current);
-        waitingPingRef.current = null;
+    const maybeResume = async () => {
+      const resumeRaw = sessionStorage.getItem(ACTIVE_SESSION_KEY);
+      if (!resumeRaw) {
+        openWaitingRoom();
+        return;
       }
-    };
 
-    waitingSocket.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data) as PairMessage | { type: 'error'; message: string } | { type: 'waiting'; message: string } | { type: 'pong' };
-        if (!message || message.type === 'pong') {
+        const resume = JSON.parse(resumeRaw) as { session_id: string; player_id: string };
+        if (!resume?.session_id || resume.player_id !== player.id) {
+          sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+          openWaitingRoom();
           return;
         }
-        if (message.type === 'error' || message.type === 'waiting') {
-          setWaitingMessage(message.message);
+
+        const session = await fetchSessionState(resume.session_id);
+        if (!session || session.status !== 'ongoing') {
+          sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+          openWaitingRoom();
           return;
         }
-        if (message.type === 'paired') {
-          setPendingPair(message);
-          setIsWaiting(false);
-          waitingSocketRef.current?.close();
-        }
+
+        const localColor: 'w' | 'b' = session.white_player_id === player.id ? 'w' : 'b';
+        initializeOnlineGame({
+          format: session.format as Format,
+          whitePlayer: session.white_player_name,
+          blackPlayer: session.black_player_name,
+          localPlayerColor: localColor,
+          localPlayerId: player.id,
+          sessionId: session.id,
+          whiteTime: session.white_time,
+          blackTime: session.black_time,
+          whiteHarmonyTokens: session.white_harmony_tokens,
+          blackHarmonyTokens: session.black_harmony_tokens,
+          usedPowers: session.used_powers,
+          fen: session.fen,
+        });
+        startGame();
+        setIsWaiting(false);
+        setPendingPair(null);
+        setWaitingMessage('Reconnected to active game.');
+        openGameSocket(session.id, player.id);
       } catch {
-        // Ignore malformed waiting-room events to avoid UI crashes.
+        sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+        openWaitingRoom();
       }
     };
 
-    waitingSocket.onerror = () => {
-      setWaitingMessage('Unable to connect to backend.');
-    };
+    maybeResume().catch(() => openWaitingRoom());
 
     return () => {
       clearInterval(poll);
@@ -248,6 +306,7 @@ export default function GamePlay() {
       return;
     }
     nextRoundNavLockRef.current = true;
+    sessionStorage.removeItem(ACTIVE_SESSION_KEY);
     setTimeout(() => {
       navigate('/game/play', { replace: true, state: { requeueAt: Date.now() } });
     }, 2500);
@@ -273,6 +332,7 @@ export default function GamePlay() {
       fen: session.fen,
     });
     startGame();
+    sessionStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify({ session_id: session.id, player_id: pendingPair.player_id }));
     openGameSocket(session.id, pendingPair.player_id);
     setPendingPair(null);
   };
@@ -281,6 +341,7 @@ export default function GamePlay() {
     if (gameState.onlineMatch && !gameState.gameOver && gameState.localPlayerColor) {
       surrender(gameState.localPlayerColor, true);
     }
+    sessionStorage.removeItem(ACTIVE_SESSION_KEY);
     resetGame();
     navigate('/game');
   };
@@ -388,12 +449,7 @@ export default function GamePlay() {
                     <p className="flex items-center gap-1 text-xs text-slate-500"><Users size={12} />{topColor === 'w' ? 'White' : 'Black'}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 justify-self-end">
-                  <Clock size={16} className="text-slate-500" />
-                  <div className={`text-2xl font-semibold ${gameState.currentTurn === topColor ? textColor : 'text-foreground'}`}>
-                    {Math.floor(topTime / 60).toString().padStart(2, '0')}:{(topTime % 60).toString().padStart(2, '0')}
-                  </div>
-                </div>
+                <div className="text-xs font-medium text-slate-500">{topColor === 'w' ? 'White' : 'Black'}</div>
               </div>
             </div>
 
@@ -412,12 +468,7 @@ export default function GamePlay() {
                     <p className="flex items-center gap-1 text-xs text-slate-500"><Users size={12} />{bottomColor === 'w' ? 'White' : 'Black'}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 justify-self-end">
-                  <Clock size={16} className="text-slate-500" />
-                  <div className={`text-2xl font-semibold ${gameState.currentTurn === bottomColor ? textColor : 'text-foreground'}`}>
-                    {Math.floor(bottomTime / 60).toString().padStart(2, '0')}:{(bottomTime % 60).toString().padStart(2, '0')}
-                  </div>
-                </div>
+                <div className="text-xs font-medium text-slate-500">{bottomColor === 'w' ? 'White' : 'Black'}</div>
               </div>
             </div>
 
@@ -463,12 +514,42 @@ export default function GamePlay() {
                 <MoveHistory />
               </div>
             </div>
+
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b p-3">
+                <h3 className={`text-sm font-semibold ${textColor}`}>Game Clock</h3>
+              </div>
+              <div className="space-y-3 p-4">
+                <div className={`rounded-lg border px-3 py-3 ${gameState.currentTurn === topColor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <p className="text-xs text-slate-600">{topPlayerName}</p>
+                  <p className="mt-1 text-4xl font-semibold tracking-tight">
+                    {Math.floor(topTime / 60).toString().padStart(2, '0')}:{(topTime % 60).toString().padStart(2, '0')}
+                  </p>
+                </div>
+                <div className={`rounded-lg border px-3 py-3 ${gameState.currentTurn === bottomColor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <p className="text-xs text-slate-600">{bottomPlayerName}</p>
+                  <p className="mt-1 text-4xl font-semibold tracking-tight">
+                    {Math.floor(bottomTime / 60).toString().padStart(2, '0')}:{(bottomTime % 60).toString().padStart(2, '0')}
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </main>
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

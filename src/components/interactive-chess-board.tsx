@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { Chess, type Square } from 'chess.js';
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -44,7 +44,7 @@ const POWER_BUTTONS = [
   {
     key: 'resurrection',
     label: 'Christian/Nasrani Keeper',
-    description: 'Resurrection: revives once on d1/d8 if captured; delayed if blocked.',
+    description: 'Resurrection: if your keeper was captured, click to respawn on d1/d8 (once per game).',
     icon: '\u2655',
     color: 'bg-blue-500',
   },
@@ -60,6 +60,7 @@ export function InteractiveChessBoard() {
     decrementTimer,
     setActivePowerMode,
     makeSpecialMove,
+    triggerResurrection,
     useHarmonyToken,
   } = useGame();
 
@@ -82,10 +83,21 @@ export function InteractiveChessBoard() {
   const ranks = isFlipped ? ['1', '2', '3', '4', '5', '6', '7', '8'] : ['8', '7', '6', '5', '4', '3', '2', '1'];
 
   const boardTurn = chess.turn() as 'w' | 'b';
-  const canActThisTurn =
-    !gameState.onlineMatch || !gameState.localPlayerColor || boardTurn === gameState.localPlayerColor;
-
+  const canActThisTurn = !gameState.onlineMatch || !gameState.localPlayerColor || boardTurn === gameState.localPlayerColor;
   const currentPowerState = boardTurn === 'w' ? gameState.usedPowers.white : gameState.usedPowers.black;
+
+  const isCheck = chess.isCheck();
+  const isCheckmate = chess.isCheckmate();
+  const losingKingColor = isCheckmate ? (chess.turn() as 'w' | 'b') : null;
+  const winningKingColor = isCheckmate ? (losingKingColor === 'w' ? 'b' : 'w') : null;
+
+  const resurrectionAvailable = useMemo(() => {
+    if (gameState.format !== 'powers' || currentPowerState.resurrection) {
+      return false;
+    }
+    const hasQueen = chess.board().some((rank) => rank.some((piece) => piece?.type === 'q' && piece.color === boardTurn));
+    return !hasQueen;
+  }, [boardTurn, chess, currentPowerState.resurrection, gameState.format]);
 
   const toCoords = (square: string) => ({ file: square.charCodeAt(0) - 97, rank: Number.parseInt(square[1], 10) - 1 });
   const toSquare = (file: number, rank: number) => `${String.fromCharCode(97 + file)}${rank + 1}`;
@@ -120,7 +132,9 @@ export function InteractiveChessBoard() {
     const fullmove = Number.parseInt(parts[5], 10);
     parts[5] = Number.isFinite(fullmove)
       ? String(moverColor === 'b' ? fullmove + 1 : fullmove)
-      : (moverColor === 'b' ? '2' : '1');
+      : moverColor === 'b'
+        ? '2'
+        : '1';
 
     return parts.join(' ');
   };
@@ -168,8 +182,8 @@ export function InteractiveChessBoard() {
         const dstF = file + df * 2;
         const dstR = rank + dr * 2;
         if (!inBounds(midF, midR) || !inBounds(dstF, dstR)) continue;
-        const midSq = toSquare(midF, midR) as any;
-        const dstSq = toSquare(dstF, dstR) as any;
+        const midSq = toSquare(midF, midR) as Square;
+        const dstSq = toSquare(dstF, dstR) as Square;
         const midPiece = chess.get(midSq);
         if (!midPiece || midPiece.color !== color) continue;
         const dstPiece = chess.get(dstSq);
@@ -190,7 +204,7 @@ export function InteractiveChessBoard() {
         const nf = file + df;
         const nr = rank + dr;
         if (!inBounds(nf, nr)) continue;
-        const sq = toSquare(nf, nr) as any;
+        const sq = toSquare(nf, nr) as Square;
         const p = chess.get(sq);
         if (p && p.color === color && canExecuteTrade(from, sq, color)) {
           targets.push(sq);
@@ -205,7 +219,7 @@ export function InteractiveChessBoard() {
     selectSquare(square);
     if (mode === 'convert') {
       const legal = chess
-        .moves({ square: square as any, verbose: true })
+        .moves({ square: square as Square, verbose: true })
         .filter((move) => move.piece === 'b')
         .map((move) => move.to);
       setLegalMoves(legal);
@@ -220,9 +234,19 @@ export function InteractiveChessBoard() {
     }
   };
 
-
   const handlePowerClick = (powerType: string) => {
-    if (!canActThisTurn || gameState.gameOver || powerType === 'resurrection') {
+    if (!canActThisTurn || gameState.gameOver) {
+      return;
+    }
+
+    if (powerType === 'resurrection') {
+      const ok = triggerResurrection(boardTurn, true);
+      if (ok) {
+        setActivePowerMode(null);
+        setPowerSource(null);
+        selectSquare(null);
+        setLegalMoves([]);
+      }
       return;
     }
 
@@ -245,7 +269,7 @@ export function InteractiveChessBoard() {
       return;
     }
 
-    const piece = chess.get(square as any);
+    const piece = chess.get(square as Square);
 
     if (gameState.activePowerMode) {
       const mode = gameState.activePowerMode;
@@ -258,18 +282,15 @@ export function InteractiveChessBoard() {
         if (mode === 'convert' && piece.type === 'b') {
           setPowerSourceAndTargets(mode, square, piece.color);
         }
-
         if (mode === 'leap' && piece.type === 'n') {
           setPowerSourceAndTargets(mode, square, piece.color);
         }
-
         if (mode === 'trade' && piece.type === 'r') {
           setPowerSourceAndTargets(mode, square, piece.color);
         }
         return;
       }
 
-      // If a highlighted power target is clicked, execute immediately.
       if (gameState.legalMoves.includes(square)) {
         const ok = makeSpecialMove(mode, powerSource, square);
         if (ok) {
@@ -295,6 +316,7 @@ export function InteractiveChessBoard() {
           return;
         }
       }
+
       const ok = makeSpecialMove(mode, powerSource, square);
       if (ok) {
         setActivePowerMode(null);
@@ -314,7 +336,7 @@ export function InteractiveChessBoard() {
 
     if (piece && piece.color === boardTurn) {
       selectSquare(square);
-      const legal = chess.moves({ square: square as any, verbose: true }).map((move) => move.to);
+      const legal = chess.moves({ square: square as Square, verbose: true }).map((move) => move.to);
       setLegalMoves(legal);
     } else {
       selectSquare(null);
@@ -341,13 +363,14 @@ export function InteractiveChessBoard() {
               {POWER_BUTTONS.map((power) => {
                 const used = currentPowerState[power.key as keyof typeof currentPowerState];
                 const active = gameState.activePowerMode === power.key;
+                const resurrectionDisabled = power.key === 'resurrection' && (!resurrectionAvailable || used);
                 return (
                   <Tooltip key={power.key}>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
                         onClick={() => handlePowerClick(power.key)}
-                        disabled={gameState.gameOver || used || (power.key === 'resurrection' && used) || !canActThisTurn}
+                        disabled={gameState.gameOver || !canActThisTurn || (power.key !== 'resurrection' && used) || resurrectionDisabled}
                         className={`h-14 w-14 rounded-full text-3xl text-white shadow-[0_4px_10px_rgba(0,0,0,0.4)] transition ${power.color} ${
                           active ? 'ring-4 ring-[#f7ec74] outline outline-2 outline-[#4b4845]' : ''
                         } disabled:cursor-not-allowed disabled:opacity-50`}
@@ -393,26 +416,32 @@ export function InteractiveChessBoard() {
         <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/10" />
         <div className="grid w-[min(72vh,92vw,820px)] grid-cols-8 overflow-hidden rounded-lg border border-[#b8cbe3] bg-[#b8cbe3]">
           {squares.map(({ square, file, rank }) => {
-            const piece = chess.get(square as any);
+            const piece = chess.get(square as Square);
             const isLight = (file.charCodeAt(0) - 97 + Number.parseInt(rank, 10)) % 2 === 0;
             const isSelected = gameState.selectedSquare === square;
             const isLegalMove = gameState.legalMoves.includes(square);
             const isLastMove = !!gameState.lastMove && (square === gameState.lastMove.from || square === gameState.lastMove.to);
+
+            let squareBg = isLight ? 'bg-[#ffffff]' : 'bg-[#9ec9f3]';
+            if (isLastMove) squareBg = 'bg-[#eaf6ff]';
+            if (isSelected) squareBg = 'bg-[#d9eeff]';
+
+            if (piece?.type === 'k') {
+              if (isCheckmate && piece.color === winningKingColor) {
+                squareBg = 'bg-[#9be7a3]';
+              } else if (isCheckmate && piece.color === losingKingColor) {
+                squareBg = 'bg-[#fca5a5]';
+              } else if (isCheck && piece.color === boardTurn) {
+                squareBg = 'bg-[#fde68a]';
+              }
+            }
 
             return (
               <button
                 key={square}
                 type="button"
                 onClick={() => handleSquareClick(square)}
-                className={`relative aspect-square flex items-center justify-center text-[clamp(1.45rem,3.8vw,3.15rem)] font-bold leading-none transition ${
-                  isSelected
-                    ? 'bg-[#d9eeff]'
-                    : isLastMove
-                      ? 'bg-[#eaf6ff]'
-                      : isLight
-                        ? 'bg-[#ffffff]'
-                        : 'bg-[#9ec9f3]'
-                }`}
+                className={`relative aspect-square flex items-center justify-center text-[clamp(1.45rem,3.8vw,3.15rem)] font-bold leading-none transition ${squareBg}`}
               >
                 <span
                   className={`pointer-events-none absolute ${
@@ -446,18 +475,3 @@ export function InteractiveChessBoard() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

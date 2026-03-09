@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 
 import { Header } from '@/components/header';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import {
   pairRound,
   updateAdminGameOrder,
   updateAdminPlayer,
-  updateAdminTimeControl,
+
   type GameFormat,
   type PlayerProfile,
   type SessionState,
@@ -49,8 +49,6 @@ export default function AdminPage() {
 
   const [editPoints, setEditPoints] = useState<Record<string, number>>({});
   const [editTokens, setEditTokens] = useState<Record<string, number>>({});
-  const [editTime, setEditTime] = useState<Record<GameFormat, number>>({ blitz: 5, rapid: 10, powers: 10, knockout: 10 });
-  const [editInc, setEditInc] = useState<Record<GameFormat, number>>({ blitz: 0.05, rapid: 0, powers: 0, knockout: 0.05 });
 
   const loadState = async (pwd: string) => {
     const state = await fetchAdminState(pwd);
@@ -70,19 +68,6 @@ export default function AdminPage() {
     });
     setEditPoints(pointsMap);
     setEditTokens(tokenMap);
-
-    setEditTime({
-      blitz: state.time_controls.blitz.time / 60,
-      rapid: state.time_controls.rapid.time / 60,
-      powers: state.time_controls.powers.time / 60,
-      knockout: state.time_controls.knockout.time / 60,
-    });
-    setEditInc({
-      blitz: state.time_controls.blitz.increment / 60,
-      rapid: state.time_controls.rapid.increment / 60,
-      powers: state.time_controls.powers.increment / 60,
-      knockout: state.time_controls.knockout.increment / 60,
-    });
   };
 
   useEffect(() => {
@@ -177,19 +162,6 @@ export default function AdminPage() {
       setSaving(false);
     }
   };
-
-  const saveTimeControl = async (format: GameFormat) => {
-    setStatus(null);
-    setError(null);
-    try {
-      const controls = await updateAdminTimeControl(password, format, Math.max(60, Math.round((editTime[format] || 1) * 60)), Math.max(0, Math.round((editInc[format] || 0) * 60)));
-      setTimeControls(controls);
-      setStatus(`${FORMAT_LABELS[format]} timer updated.`);
-    } catch {
-      setError('Failed to update timer values');
-    }
-  };
-
   const runPairing = async () => {
     setPairing(true);
     setStatus(null);
@@ -310,46 +282,6 @@ export default function AdminPage() {
           </Button>
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h2 className="mb-1 text-lg font-semibold">Time Settings (Backend Controlled)</h2>
-          <p className="mb-3 text-sm text-slate-600">Set once per format. These values are used each time that format appears in order.</p>
-          <div className="grid gap-3 md:grid-cols-2">
-            {ALL_FORMATS.map((format) => (
-              <div key={format} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-2 font-medium">{FORMAT_LABELS[format]}</p>
-                <div className="flex flex-wrap items-end gap-2">
-                  <label className="text-xs text-slate-600">
-                    Main Time (minutes)
-                    <input
-                      type="number"
-                      min={1}
-                      max={120}
-                      value={editTime[format]}
-                      onChange={(e) => setEditTime((prev) => ({ ...prev, [format]: Math.max(1, Number(e.target.value) || 1) }))}
-                      className="mt-1 w-28 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                    />
-                  </label>
-                  <label className="text-xs text-slate-600">
-                    Increment (minutes)
-                    <input
-                      type="number"
-                      min={0}
-                      max={5}
-                      value={editInc[format]}
-                      onChange={(e) => setEditInc((prev) => ({ ...prev, [format]: Math.max(0, Number(e.target.value) || 0) }))}
-                      className="mt-1 w-24 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-                    />
-                  </label>
-                  <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => saveTimeControl(format)}>
-                    Save Timer
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">Active: {((timeControls[format]?.time ?? 0) / 60).toFixed(2)}m + {((timeControls[format]?.increment ?? 0) / 60).toFixed(2)}m</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
         <section className="grid gap-6 md:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="mb-1 text-lg font-semibold">Ready Queue</h2>
@@ -423,6 +355,8 @@ export default function AdminPage() {
     </div>
   );
 }
+
+
 
 
 
