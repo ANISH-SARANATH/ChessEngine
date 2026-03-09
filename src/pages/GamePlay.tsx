@@ -530,13 +530,13 @@ export default function GamePlay() {
               <div className="space-y-3 p-4">
                 <div className={`rounded-lg border px-3 py-3 ${gameState.currentTurn === topColor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}>
                   <p className="text-xs text-slate-600">{topPlayerName}</p>
-                  <p className="mt-1 text-4xl font-semibold tracking-tight">
+                  <p className="mt-1 text-6xl font-semibold tracking-tight">
                     {Math.floor(topTime / 60).toString().padStart(2, '0')}:{(topTime % 60).toString().padStart(2, '0')}
                   </p>
                 </div>
                 <div className={`rounded-lg border px-3 py-3 ${gameState.currentTurn === bottomColor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-50'}`}>
                   <p className="text-xs text-slate-600">{bottomPlayerName}</p>
-                  <p className="mt-1 text-4xl font-semibold tracking-tight">
+                  <p className="mt-1 text-6xl font-semibold tracking-tight">
                     {Math.floor(bottomTime / 60).toString().padStart(2, '0')}:{(bottomTime % 60).toString().padStart(2, '0')}
                   </p>
                 </div>
@@ -561,6 +561,7 @@ export default function GamePlay() {
     </div>
   );
 }
+
 
 
 
