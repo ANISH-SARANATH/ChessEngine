@@ -63,6 +63,8 @@ export default function GamePlay() {
   const [waitingMessage, setWaitingMessage] = useState('Joining waiting room...');
   const [pendingPair, setPendingPair] = useState<PairMessage | null>(null);
   const [leaderboard, setLeaderboard] = useState<PlayerProfile[]>([]);
+  const [showResultDialog, setShowResultDialog] = useState(false);
+  const [resultSummary, setResultSummary] = useState('');
 
   const format = gameState.format;
   const requeueToken = ((location.state as { requeueAt?: number } | null)?.requeueAt ?? 0);
@@ -302,15 +304,14 @@ export default function GamePlay() {
   }, [setNetworkEventHandler]);
 
   useEffect(() => {
-    if (!gameState.onlineMatch || !gameState.gameOver || nextRoundNavLockRef.current) {
+    if (!gameState.gameOver || nextRoundNavLockRef.current) {
       return;
     }
     nextRoundNavLockRef.current = true;
     sessionStorage.removeItem(ACTIVE_SESSION_KEY);
-    setTimeout(() => {
-      navigate('/game/play', { replace: true, state: { requeueAt: Date.now() } });
-    }, 2500);
-  }, [gameState.gameOver, gameState.onlineMatch, navigate]);
+    setResultSummary(gameState.result || 'Game over.');
+    setShowResultDialog(true);
+  }, [gameState.gameOver, gameState.result]);
 
   const startFromRules = () => {
     if (!pendingPair) {
@@ -349,6 +350,13 @@ export default function GamePlay() {
   const handleSurrender = () => {
     if (window.confirm('Are you sure you want to surrender?')) {
       surrender(gameState.currentTurn);
+    }
+  };
+
+  const handleResultContinue = () => {
+    setShowResultDialog(false);
+    if (gameState.onlineMatch) {
+      navigate('/game/play', { replace: true, state: { requeueAt: Date.now() } });
     }
   };
 
@@ -537,6 +545,19 @@ export default function GamePlay() {
           </div>
         </div>
       </main>
+      {showResultDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <h2 className="text-xl font-semibold text-slate-900">Game Finished</h2>
+            <p className="mt-2 text-sm text-slate-700">{resultSummary}</p>
+            <div className="mt-5 flex justify-end">
+              <Button className="bg-blue-600 text-white hover:bg-blue-700" onClick={handleResultContinue}>
+                Continue
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
