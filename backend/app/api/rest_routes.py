@@ -1,44 +1,47 @@
-from fastapi import APIRouter
-from app.models.schemas import TeamRegister, MinigameAnswer,SpendHarmony,GameResult,LoginRequest
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
+from app.models.schemas import TeamRegister, MinigameAnswer, SpendHarmony, GameResult, LoginRequest
 from app.services.team_service import TeamService
 from app.services.game_service import GameService
-from fastapi import Header, HTTPException
-from app.core.config import settings
 from app.services.event_service import EventService
-
+from app.core.config import settings
 
 router = APIRouter()
+
+# ==========================================
+# TEAM & AUTH ROUTES
+# ==========================================
 
 @router.post("/teams/register")
 async def register_team(team_data: TeamRegister):
     return await TeamService.register_team(team_data)
 
+@router.post("/teams/login")
+async def team_login(data: LoginRequest):
+    """Frontend calls this to verify credentials before routing to the dashboard."""
+    return await TeamService.verify_login(data)
+
 @router.get("/teams/leaderboard")
 async def get_leaderboard():
     return await TeamService.get_leaderboard()
+
+@router.get("/teams/{team_name}/schedule")
+async def get_team_schedule(team_name: str):
+    """Frontend calls this to get active matches and render 'Join Game' buttons."""
+    return await GameService.get_team_schedule(team_name)
+
+
+# ==========================================
+# GAMEPLAY ROUTES
+# ==========================================
 
 @router.post("/minigame/verify")
 async def verify_minigame(data: MinigameAnswer):
     return await GameService.verify_minigame(data)
 
-@router.post("/admin/generate-matches")
-async def generate_matches(admin_secret: str = Header(...)):
-    """Admin endpoint to trigger pairing after all teams have registered."""
-    if admin_secret != settings.ADMIN_SECRET: # Add ADMIN_SECRET to your .env
-        raise HTTPException(status_code=401, detail="Unauthorized admin access")
-    matches = await GameService.generate_matchmaking()
-    return {"message": f"Generated {len(matches)} games.", "matches": matches}
-
-
 @router.post("/game/spend-harmony")
 async def spend_harmony(data: SpendHarmony):
     return await TeamService.spend_harmony_points(data)
-
-
-@router.post("/admin/generate-knockouts")
-async def generate_knockouts():
-    matches = await GameService.generate_knockout_matches()
-    return {"message": f"Generated {len(matches)} 1v1 knockout matches.", "matches": matches}
 
 @router.post("/game/result")
 async def submit_game_result(data: GameResult):
@@ -50,26 +53,41 @@ async def fetch_game_state(game_id: str):
     return await GameService.get_game_state(game_id)
 
 
-@router.get("/teams/{team_name}/schedule")
-async def get_team_schedule(team_name: str):
-    return await GameService.get_team_schedule(team_name)
-
-@router.post("/teams/login")
-async def team_login(data: LoginRequest):
-    """Frontend calls this to verify credentials before routing to the dashboard."""
-    return await TeamService.verify_login(data)
+# ==========================================
+# EVENT MANAGER & ADMIN ROUTES
+# ==========================================
 
 @router.get("/event/status")
 async def get_event_status():
-    """Frontend calls this to know which screen to render."""
+    """Frontend calls this to know which screen/phase to render."""
     phase = await EventService.get_current_phase()
     return {"current_phase": phase}
 
 @router.post("/admin/advance-phase")
 async def advance_event_phase(admin_secret: str = Header(...)):
-    """Admin clicks 'Next Phase'. Backend calculates everything automatically."""
-    from app.core.config import settings
+    """Admin clicks 'Next Phase'. Backend calculates and generates everything automatically."""
     if admin_secret != settings.ADMIN_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized admin access")
         
     return await EventService.advance_phase()
+
+# --- NEW: Safety Net Endpoint ---
+class SetPhaseRequest(BaseModel):
+    target_phase: str
+
+@router.post("/admin/set-phase")
+async def set_event_phase(data: SetPhaseRequest, admin_secret: str = Header(...)):
+    """Emergency override to force the tournament into a specific phase."""
+    if admin_secret != settings.ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized admin access")
+        
+    if data.target_phase not in EventService.PHASES:
+        raise HTTPException(status_code=400, detail=f"Invalid phase. Must be one of {EventService.PHASES}")
+        
+    from app.core.database import db
+    await db.get_collection("event_config").update_one(
+        {"_id": "global_state"}, 
+        {"$set": {"current_phase": data.target_phase}},
+        upsert=True
+    )
+    return {"status": "success", "message": f"Event manually forced to {data.target_phase} phase."}

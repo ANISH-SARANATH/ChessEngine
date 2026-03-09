@@ -118,8 +118,8 @@ class TeamService:
             team_a_update["$inc"]["nr"] = 1
             team_b_update["$inc"]["nr"] = 1
             # Assuming standard chess scoring for draws
-            team_a_update["$inc"]["points"] = 0
-            team_b_update["$inc"]["points"] = 0
+            team_a_update["$inc"]["points"] = 0.5
+            team_b_update["$inc"]["points"] = 0.5
         
         elif data.winner_team == data.team_a:
             team_a_update["$inc"]["wins"] = 1
